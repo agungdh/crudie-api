@@ -1,7 +1,5 @@
 import { sql } from "drizzle-orm";
 import {
-  pgTable,
-  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -48,12 +46,3 @@ export function partialLowerUniqueIndex(
     .where(sql`${deletedAt} is null`);
 }
 
-export const notes = pgTable("notes", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  title: text("title").notNull(),
-  content: text("content"),
-  ...auditColumns(),
-});
-
-export type Note = typeof notes.$inferSelect;
-export type NewNote = typeof notes.$inferInsert;
