@@ -13,6 +13,11 @@ declare global {
     S3_ACCESS_KEY_ID: string;
     S3_SECRET_ACCESS_KEY: string;
     S3_FORCE_PATH_STYLE: string;
+    /**
+     * Comma-separated CORS allowlist. Optional — defaults to
+     * `http://localhost:4200` (Angular dev server) when unset.
+     */
+    CORS_ORIGINS?: string;
   }
 }
 

@@ -1,9 +1,12 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv } from "./db/middleware";
+import { corsMiddleware } from "./lib/cors";
 import { pegawaiRoute } from "./routes/pegawai";
 
 const app = new Hono<AppEnv>();
+
+app.use("*", corsMiddleware);
 
 app.route("/api/pegawai", pegawaiRoute);
 
