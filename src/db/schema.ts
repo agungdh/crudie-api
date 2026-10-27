@@ -1,5 +1,8 @@
 import { sql } from "drizzle-orm";
 import {
+  date,
+  pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -45,4 +48,33 @@ export function partialLowerUniqueIndex(
     .on(sql`lower(${column})`)
     .where(sql`${deletedAt} is null`);
 }
+
+/**
+ * Pegawai (employee). `nip` and `email` are unique among rows that are not
+ * soft-deleted, so a deleted pegawai's NIP/email can be reused.
+ */
+export const pegawai = pgTable(
+  "pegawai",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nip: text("nip").notNull(),
+    nama: text("nama").notNull(),
+    email: text("email"),
+    jabatan: text("jabatan"),
+    unitKerja: text("unit_kerja"),
+    telepon: text("telepon"),
+    alamat: text("alamat"),
+    /** `aktif` | `nonaktif` | `cuti` — validated by the route, not by the DB. */
+    status: text("status").notNull().default("aktif"),
+    tanggalMasuk: date("tanggal_masuk", { mode: "string" }),
+    ...auditColumns(),
+  },
+  (t) => [
+    partialLowerUniqueIndex("pegawai_nip_unique", t.nip, t.deletedAt),
+    partialLowerUniqueIndex("pegawai_email_unique", t.email, t.deletedAt),
+  ],
+);
+
+export type Pegawai = typeof pegawai.$inferSelect;
+export type NewPegawai = typeof pegawai.$inferInsert;
 

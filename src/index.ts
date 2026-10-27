@@ -1,6 +1,10 @@
 import { Hono } from "hono";
+import type { AppEnv } from "./db/middleware";
+import { pegawaiRoute } from "./routes/pegawai";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
+
+app.route("/api/pegawai", pegawaiRoute);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
