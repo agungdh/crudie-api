@@ -68,7 +68,7 @@ export const pegawai = pgTable(
     unitKerja: text("unit_kerja"),
     telepon: text("telepon"),
     alamat: text("alamat"),
-    /** `aktif` | `nonaktif` | `cuti` — validated by the route, not by the DB. */
+    /** `aktif` | `nonaktif` | `cuti` — validated by zod, not by the DB. */
     status: text("status").notNull().default("aktif"),
     tanggalMasuk: date("tanggal_masuk", { mode: "string" }),
     ...auditColumns(),

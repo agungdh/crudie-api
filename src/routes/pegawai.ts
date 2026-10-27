@@ -9,23 +9,18 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { Hono } from "hono";
 import { database, type AppEnv } from "../db/middleware";
-import { pegawai, type NewPegawai, type Pegawai } from "../db/schema";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const STATUSES = ["aktif", "nonaktif", "cuti"] as const;
-
-const OPTIONAL_TEXT_FIELDS = [
-  "jabatan",
-  "unitKerja",
-  "telepon",
-  "alamat",
-] as const;
+import { pegawai, type Pegawai } from "../db/schema";
+import { validateJson, validateParam, validateQuery } from "../lib/validation";
+import {
+  createPegawaiSchema,
+  listPegawaiQuerySchema,
+  SORT_KEYS,
+  updatePegawaiSchema,
+  uuidParamSchema,
+} from "./pegawai.schema";
 
 export const pegawaiRoute = new Hono<AppEnv>();
 
@@ -52,28 +47,13 @@ function serialize(row: Pegawai) {
   };
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function intParam(
-  raw: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-) {
-  if (raw === undefined || raw === "") return fallback;
-  const value = Number(raw);
-  if (!Number.isInteger(value)) return fallback;
-  return Math.min(Math.max(value, min), max);
-}
+type SortKey = (typeof SORT_KEYS)[number];
 
 /**
- * Columns a list request may sort by. `id` is the default and always the final
- * tiebreaker, so the ordering is total and the keyset cursor cannot skip or
- * repeat a row.
+ * Columns a list request may sort by. Keys are asserted against `SORT_KEYS`
+ * (the zod enum) so a new sortable column cannot drift between the two.
  */
-const SORT_FIELDS = {
+const SORT_COLUMNS = {
   id: pegawai.id,
   nip: pegawai.nip,
   nama: pegawai.nama,
@@ -81,9 +61,7 @@ const SORT_FIELDS = {
   tanggalMasuk: pegawai.tanggalMasuk,
   createdAt: pegawai.createdAt,
   updatedAt: pegawai.updatedAt,
-} as const;
-
-type SortKey = keyof typeof SORT_FIELDS;
+} as const satisfies Record<SortKey, AnyPgColumn>;
 
 /**
  * Sort/keyset expression for a column. `id` is non-nullable; nullable columns
@@ -91,103 +69,8 @@ type SortKey = keyof typeof SORT_FIELDS;
  * when the value is NULL (nulls then sort first in asc and last in desc).
  */
 function sortExpression(key: SortKey) {
-  const column = SORT_FIELDS[key];
+  const column = SORT_COLUMNS[key];
   return key === "id" ? sql`${column}` : sql`coalesce(${column}::text, '')`;
-}
-
-function isValidDate(value: string) {
-  const [year, month, day] = value.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  );
-}
-
-type ParseResult =
-  | { ok: true; values: Partial<NewPegawai>; touched: boolean }
-  | { ok: false; error: string };
-
-/**
- * Validates a JSON payload for create (`requireIdentity`) or update.
- * `undefined` means "not sent", `null` clears an optional field.
- */
-function parseBody(payload: unknown, requireIdentity: boolean): ParseResult {
-  if (!isPlainObject(payload)) {
-    return { ok: false, error: "Body must be a JSON object" };
-  }
-
-  const values: Partial<NewPegawai> = {};
-  let touched = false;
-
-  for (const field of ["nip", "nama"] as const) {
-    const raw = payload[field];
-    if (raw === undefined) {
-      if (requireIdentity) return { ok: false, error: `${field} is required` };
-      continue;
-    }
-    if (typeof raw !== "string" || !raw.trim()) {
-      return { ok: false, error: `${field} must be a non-empty string` };
-    }
-    values[field] = raw.trim();
-    touched = true;
-  }
-
-  for (const field of OPTIONAL_TEXT_FIELDS) {
-    const raw = payload[field];
-    if (raw === undefined) continue;
-    if (raw !== null && typeof raw !== "string") {
-      return { ok: false, error: `${field} must be a string or null` };
-    }
-    values[field] = raw === null ? null : raw.trim() || null;
-    touched = true;
-  }
-
-  if (payload.email !== undefined) {
-    const raw = payload.email;
-    if (raw === null) {
-      values.email = null;
-    } else if (typeof raw !== "string" || !EMAIL_RE.test(raw.trim())) {
-      return { ok: false, error: "email must be a valid email address or null" };
-    } else {
-      values.email = raw.trim().toLowerCase();
-    }
-    touched = true;
-  }
-
-  if (payload.status !== undefined) {
-    const raw = payload.status;
-    if (
-      typeof raw !== "string" ||
-      !STATUSES.includes(raw as (typeof STATUSES)[number])
-    ) {
-      return { ok: false, error: `status must be one of: ${STATUSES.join(", ")}` };
-    }
-    values.status = raw;
-    touched = true;
-  }
-
-  if (payload.tanggalMasuk !== undefined) {
-    const raw = payload.tanggalMasuk;
-    if (raw === null) {
-      values.tanggalMasuk = null;
-    } else if (
-      typeof raw !== "string" ||
-      !DATE_RE.test(raw) ||
-      !isValidDate(raw)
-    ) {
-      return {
-        ok: false,
-        error: "tanggalMasuk must be a valid YYYY-MM-DD date or null",
-      };
-    } else {
-      values.tanggalMasuk = raw;
-    }
-    touched = true;
-  }
-
-  return { ok: true, values, touched };
 }
 
 /**
@@ -238,37 +121,14 @@ function conflict(err: unknown): { error: string } | null {
  * cursor), and `nextCursor` is null on the last page. The default order is
  * `id desc`, i.e. newest first.
  */
-pegawaiRoute.get("/", async (c) => {
+pegawaiRoute.get("/", validateQuery(listPegawaiQuerySchema), async (c) => {
   const db = c.get("db");
-  const limit = intParam(c.req.query("limit"), 20, 1, 100);
-
-  const sortKey = c.req.query("sort") || "id";
-  if (!Object.hasOwn(SORT_FIELDS, sortKey)) {
-    return c.json(
-      { error: `sort must be one of: ${Object.keys(SORT_FIELDS).join(", ")}` },
-      400,
-    );
-  }
-
-  const order = c.req.query("order") || "desc";
-  if (order !== "asc" && order !== "desc") {
-    return c.json({ error: "order must be asc or desc" }, 400);
-  }
+  const { limit, sort, order, status, q, after } = c.req.valid("query");
 
   const conditions: SQL[] = [isNull(pegawai.deletedAt)];
 
-  const status = c.req.query("status");
-  if (status) {
-    if (!STATUSES.includes(status as (typeof STATUSES)[number])) {
-      return c.json(
-        { error: `status must be one of: ${STATUSES.join(", ")}` },
-        400,
-      );
-    }
-    conditions.push(eq(pegawai.status, status));
-  }
+  if (status) conditions.push(eq(pegawai.status, status));
 
-  const q = c.req.query("q")?.trim();
   if (q) {
     const pattern = `%${q}%`;
     const search = or(
@@ -279,13 +139,10 @@ pegawaiRoute.get("/", async (c) => {
     if (search) conditions.push(search);
   }
 
-  const sortExpr = sortExpression(sortKey as SortKey);
+  const sortExpr = sortExpression(sort);
   const direction = order === "asc" ? asc : desc;
 
-  const after = c.req.query("after");
   if (after) {
-    if (!UUID_RE.test(after)) return c.json({ error: "Invalid cursor" }, 400);
-
     const [cursor] = await db
       .select({ id: pegawai.id, value: sortExpr })
       .from(pegawai)
@@ -306,7 +163,7 @@ pegawaiRoute.get("/", async (c) => {
     .from(pegawai)
     .where(and(...conditions))
     .orderBy(
-      ...(sortKey === "id"
+      ...(sort === "id"
         ? [direction(pegawai.id)]
         : [direction(sortExpr), direction(pegawai.id)]),
     )
@@ -323,9 +180,8 @@ pegawaiRoute.get("/", async (c) => {
   });
 });
 
-pegawaiRoute.get("/:uuid", async (c) => {
-  const uuid = c.req.param("uuid");
-  if (!UUID_RE.test(uuid)) return c.json({ error: "Invalid uuid" }, 400);
+pegawaiRoute.get("/:uuid", validateParam(uuidParamSchema), async (c) => {
+  const { uuid } = c.req.valid("param");
 
   const [row] = await c
     .get("db")
@@ -338,23 +194,15 @@ pegawaiRoute.get("/:uuid", async (c) => {
   return c.json({ data: serialize(row) });
 });
 
-pegawaiRoute.post("/", async (c) => {
-  const parsed = parseBody(await c.req.json().catch(() => null), true);
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-
-  const nip = parsed.values.nip;
-  const nama = parsed.values.nama;
-  if (typeof nip !== "string" || typeof nama !== "string") {
-    return c.json({ error: "nip and nama are required" }, 400);
-  }
-
+pegawaiRoute.post("/", validateJson(createPegawaiSchema), async (c) => {
+  const values = c.req.valid("json");
   const now = new Date();
 
   try {
     const [row] = await c
       .get("db")
       .insert(pegawai)
-      .values({ ...parsed.values, nip, nama, createdAt: now, updatedAt: now })
+      .values({ ...values, createdAt: now, updatedAt: now })
       .returning();
 
     return c.json({ data: serialize(row) }, 201);
@@ -365,37 +213,37 @@ pegawaiRoute.post("/", async (c) => {
   }
 });
 
-pegawaiRoute.patch("/:uuid", async (c) => {
-  const uuid = c.req.param("uuid");
-  if (!UUID_RE.test(uuid)) return c.json({ error: "Invalid uuid" }, 400);
+pegawaiRoute.patch(
+  "/:uuid",
+  validateParam(uuidParamSchema),
+  validateJson(updatePegawaiSchema),
+  async (c) => {
+    const { uuid } = c.req.valid("param");
+    const values = c.req.valid("json");
 
-  const parsed = parseBody(await c.req.json().catch(() => null), false);
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  if (!parsed.touched) return c.json({ error: "Nothing to update" }, 400);
+    try {
+      const [row] = await c
+        .get("db")
+        .update(pegawai)
+        .set({ ...values, updatedAt: new Date() })
+        .where(and(eq(pegawai.uuid, uuid), isNull(pegawai.deletedAt)))
+        .returning();
 
-  try {
-    const [row] = await c
-      .get("db")
-      .update(pegawai)
-      .set({ ...parsed.values, updatedAt: new Date() })
-      .where(and(eq(pegawai.uuid, uuid), isNull(pegawai.deletedAt)))
-      .returning();
-
-    if (!row) return c.json({ error: "Not found" }, 404);
-    return c.json({ data: serialize(row) });
-  } catch (err) {
-    const error = conflict(err);
-    if (error) return c.json(error, 409);
-    throw err;
-  }
-});
+      if (!row) return c.json({ error: "Not found" }, 404);
+      return c.json({ data: serialize(row) });
+    } catch (err) {
+      const error = conflict(err);
+      if (error) return c.json(error, 409);
+      throw err;
+    }
+  },
+);
 
 /** Soft delete: the row stays, but disappears from list/detail and frees NIP/email. */
-pegawaiRoute.delete("/:uuid", async (c) => {
-  const uuid = c.req.param("uuid");
-  if (!UUID_RE.test(uuid)) return c.json({ error: "Invalid uuid" }, 400);
-
+pegawaiRoute.delete("/:uuid", validateParam(uuidParamSchema), async (c) => {
+  const { uuid } = c.req.valid("param");
   const now = new Date();
+
   const [row] = await c
     .get("db")
     .update(pegawai)
@@ -407,23 +255,26 @@ pegawaiRoute.delete("/:uuid", async (c) => {
   return c.json({ data: row });
 });
 
-pegawaiRoute.post("/:uuid/restore", async (c) => {
-  const uuid = c.req.param("uuid");
-  if (!UUID_RE.test(uuid)) return c.json({ error: "Invalid uuid" }, 400);
+pegawaiRoute.post(
+  "/:uuid/restore",
+  validateParam(uuidParamSchema),
+  async (c) => {
+    const { uuid } = c.req.valid("param");
 
-  try {
-    const [row] = await c
-      .get("db")
-      .update(pegawai)
-      .set({ deletedAt: null, updatedAt: new Date() })
-      .where(eq(pegawai.uuid, uuid))
-      .returning();
+    try {
+      const [row] = await c
+        .get("db")
+        .update(pegawai)
+        .set({ deletedAt: null, updatedAt: new Date() })
+        .where(eq(pegawai.uuid, uuid))
+        .returning();
 
-    if (!row) return c.json({ error: "Not found" }, 404);
-    return c.json({ data: serialize(row) });
-  } catch (err) {
-    const error = conflict(err);
-    if (error) return c.json(error, 409);
-    throw err;
-  }
-});
+      if (!row) return c.json({ error: "Not found" }, 404);
+      return c.json({ data: serialize(row) });
+    } catch (err) {
+      const error = conflict(err);
+      if (error) return c.json(error, 409);
+      throw err;
+    }
+  },
+);
