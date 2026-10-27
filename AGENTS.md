@@ -15,6 +15,18 @@ Postgres only — no D1, no KV. Local dev runs the database in Docker; productio
 
 There is no lint, test, or typecheck script. TypeScript is not a dependency, so `npx tsc --noEmit` fails with "this is not the tsc command"; use `npx wrangler deploy --dry-run` as the fastest build/verification check. There is no CI.
 
+## List endpoints: cursor pagination
+
+Every list endpoint is keyset/cursor paginated. No `offset`, no `total` count query.
+
+- Cursor is `?after=<uuid>` — the `uuid` (never the internal integer `id`) of the **last row of the previous page**. Omit it for the first page.
+- Response shape is `{ data: [...], meta: { nextCursor } }`, where `nextCursor` is the uuid of the last row on the page, or `null` once there are no more rows. To decide, fetch `limit + 1` rows and drop the extra one. `limit` stays a capped query param (default 20, max 100).
+- Filters and sort are **their own plain query params**, never packed/encoded/signed into the cursor. The cursor is a bare uuid so it stays readable and debuggable: `?status=aktif&q=budi&sort=nama&order=asc&after=<uuid>`.
+- Because the cursor carries no state, the client must resend the same filters/sort on every page. Changing a filter or the sort restarts pagination (drop `after`); the server cannot know the cursor was produced under different criteria, so the client owns keeping them stable.
+- Sort is `?sort=<field>&order=asc|desc`, whitelisted per endpoint (unknown field/order → 400). **Default when `sort` is absent: `id desc`** (newest first). Always append `id` as the final, same-direction tiebreaker so the ordering is total and the cursor cannot skip or repeat rows.
+- Query pattern: resolve the cursor row to its sort value + `id`, then `WHERE (sortValue, id) < (cursorValue, cursorId)` (`>` for `asc`), combined with the filter conditions and `deleted_at is null`, ordered by `sort, id` in the requested direction.
+- `src/routes/pegawai.ts` still uses `limit`/`offset` with a `count()` — convert it to this scheme when you touch that file.
+
 ## Conventions & gotchas
 
 - `worker-configuration.d.ts` is generated — never hand-edit. Add bindings/vars/secrets in `wrangler.jsonc` (JSONC, comments allowed), then run `npm run cf-typegen`. `CloudflareBindings` is a global interface used as the Hono generic: `new Hono<{ Bindings: CloudflareBindings }>()`.
