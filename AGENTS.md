@@ -12,6 +12,7 @@ Postgres only — no D1, no KV. Local dev runs the database in Docker; productio
 - `npm run deploy` — `wrangler deploy --minify`; needs Cloudflare auth (`wrangler login` or `CLOUDFLARE_API_TOKEN`).
 - `npm run cf-typegen` — regenerate `worker-configuration.d.ts` after changing bindings/vars in `wrangler.jsonc`.
 - `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` — Drizzle Kit against `src/db/schema.ts`; SQL migrations live in `drizzle/` and are committed.
+- `npm run db:seed` — `tsx src/db/seed.ts`, seeds `pegawai` with [`drizzle-seed`](https://orm.drizzle.team/docs/seed-overview) (`seed(db, { pegawai }, { count, seed }).refine(...)`). Reads env through `src/db/env.ts` (`.env` / `.dev.vars`, real env wins) and prefers `DATABASE_URL_DIRECT`. Defaults: 50 rows, `seed: 12345`; `npm run db:seed -- --count N` / `-- --seed N` override them. Because drizzle-seed is deterministic and the partial unique indexes on `lower(nip)` / `lower(email)` are invisible to it, the script refuses to run on a non-empty table: `npm run db:seed -- --reset` truncates via drizzle-seed's `reset()` first. Audit `*_by` and `deleted_at` are seeded as `NULL`.
 
 There is no lint, test, or typecheck script. TypeScript is not a dependency, so `npx tsc --noEmit` fails with "this is not the tsc command"; use `npx wrangler deploy --dry-run` as the fastest build/verification check, and `npx -y -p typescript@5 tsc --noEmit` when you need real type checking without adding a dependency. There is no CI.
 
