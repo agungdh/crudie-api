@@ -1,16 +1,6 @@
 import { Hono } from "hono";
-import type { AppEnv } from "./db/middleware";
-import { filesRoute } from "./routes/files";
-import { notesRoute } from "./routes/notes";
 
-const app = new Hono<AppEnv>();
-
-app.get("/message", (c) => {
-  return c.text("Hello Hono!");
-});
-
-app.route("/api/notes", notesRoute);
-app.route("/api/files", filesRoute);
+const app = new Hono();
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
