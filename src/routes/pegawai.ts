@@ -1,4 +1,14 @@
-import { and, asc, count, eq, ilike, isNull, or, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { Hono } from "hono";
 import { database, type AppEnv } from "../db/middleware";
 import { pegawai, type NewPegawai, type Pegawai } from "../db/schema";
@@ -56,6 +66,33 @@ function intParam(
   const value = Number(raw);
   if (!Number.isInteger(value)) return fallback;
   return Math.min(Math.max(value, min), max);
+}
+
+/**
+ * Columns a list request may sort by. `id` is the default and always the final
+ * tiebreaker, so the ordering is total and the keyset cursor cannot skip or
+ * repeat a row.
+ */
+const SORT_FIELDS = {
+  id: pegawai.id,
+  nip: pegawai.nip,
+  nama: pegawai.nama,
+  status: pegawai.status,
+  tanggalMasuk: pegawai.tanggalMasuk,
+  createdAt: pegawai.createdAt,
+  updatedAt: pegawai.updatedAt,
+} as const;
+
+type SortKey = keyof typeof SORT_FIELDS;
+
+/**
+ * Sort/keyset expression for a column. `id` is non-nullable; nullable columns
+ * are folded to `''` so `(sortValue, id)` comparisons remain a total order even
+ * when the value is NULL (nulls then sort first in asc and last in desc).
+ */
+function sortExpression(key: SortKey) {
+  const column = SORT_FIELDS[key];
+  return key === "id" ? sql`${column}` : sql`coalesce(${column}::text, '')`;
 }
 
 function isValidDate(value: string) {
@@ -195,10 +232,28 @@ function conflict(err: unknown): { error: string } | null {
   return { error: "Conflicting value" };
 }
 
+/**
+ * Keyset pagination: `?after=<uuid>` is the last row of the previous page,
+ * filters and sort stay plain sibling query params (never encoded in the
+ * cursor), and `nextCursor` is null on the last page. The default order is
+ * `id desc`, i.e. newest first.
+ */
 pegawaiRoute.get("/", async (c) => {
   const db = c.get("db");
   const limit = intParam(c.req.query("limit"), 20, 1, 100);
-  const offset = intParam(c.req.query("offset"), 0, 0, 1_000_000);
+
+  const sortKey = c.req.query("sort") || "id";
+  if (!Object.hasOwn(SORT_FIELDS, sortKey)) {
+    return c.json(
+      { error: `sort must be one of: ${Object.keys(SORT_FIELDS).join(", ")}` },
+      400,
+    );
+  }
+
+  const order = c.req.query("order") || "desc";
+  if (order !== "asc" && order !== "desc") {
+    return c.json({ error: "order must be asc or desc" }, 400);
+  }
 
   const conditions: SQL[] = [isNull(pegawai.deletedAt)];
 
@@ -224,22 +279,47 @@ pegawaiRoute.get("/", async (c) => {
     if (search) conditions.push(search);
   }
 
-  const where = and(...conditions);
+  const sortExpr = sortExpression(sortKey as SortKey);
+  const direction = order === "asc" ? asc : desc;
 
-  const [rows, [total]] = await Promise.all([
-    db
-      .select()
+  const after = c.req.query("after");
+  if (after) {
+    if (!UUID_RE.test(after)) return c.json({ error: "Invalid cursor" }, 400);
+
+    const [cursor] = await db
+      .select({ id: pegawai.id, value: sortExpr })
       .from(pegawai)
-      .where(where)
-      .orderBy(asc(pegawai.nama), asc(pegawai.id))
-      .limit(limit)
-      .offset(offset),
-    db.select({ total: count() }).from(pegawai).where(where),
-  ]);
+      .where(eq(pegawai.uuid, after))
+      .limit(1);
+
+    if (!cursor) return c.json({ error: "Invalid cursor" }, 400);
+
+    // Keyset comparison on (sortValue, id): `>` walks asc, `<` walks desc.
+    const operator = sql.raw(order === "asc" ? ">" : "<");
+    conditions.push(
+      sql`(${sortExpr}, ${pegawai.id}) ${operator} (${cursor.value}, ${cursor.id})`,
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(pegawai)
+    .where(and(...conditions))
+    .orderBy(
+      ...(sortKey === "id"
+        ? [direction(pegawai.id)]
+        : [direction(sortExpr), direction(pegawai.id)]),
+    )
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
 
   return c.json({
-    data: rows.map(serialize),
-    meta: { total: total?.total ?? 0, limit, offset },
+    data: page.map(serialize),
+    meta: {
+      nextCursor: hasMore ? page[page.length - 1]?.uuid ?? null : null,
+    },
   });
 });
 

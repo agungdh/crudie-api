@@ -25,7 +25,7 @@ Every list endpoint is keyset/cursor paginated. No `offset`, no `total` count qu
 - Because the cursor carries no state, the client must resend the same filters/sort on every page. Changing a filter or the sort restarts pagination (drop `after`); the server cannot know the cursor was produced under different criteria, so the client owns keeping them stable.
 - Sort is `?sort=<field>&order=asc|desc`, whitelisted per endpoint (unknown field/order → 400). **Default when `sort` is absent: `id desc`** (newest first). Always append `id` as the final, same-direction tiebreaker so the ordering is total and the cursor cannot skip or repeat rows.
 - Query pattern: resolve the cursor row to its sort value + `id`, then `WHERE (sortValue, id) < (cursorValue, cursorId)` (`>` for `asc`), combined with the filter conditions and `deleted_at is null`, ordered by `sort, id` in the requested direction.
-- `src/routes/pegawai.ts` still uses `limit`/`offset` with a `count()` — convert it to this scheme when you touch that file.
+- `src/routes/pegawai.ts` is the reference implementation: it resolves `after` to `(sortValue, id)`, compares the row tuple against it, and returns `nextCursor` from a `limit + 1` fetch.
 
 ## Conventions & gotchas
 
