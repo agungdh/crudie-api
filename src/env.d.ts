@@ -6,10 +6,13 @@ declare global {
   interface CloudflareBindings {
     /** Supabase connection string — use the transaction pooler (port 6543). */
     DATABASE_URL: string;
-    R2_ACCOUNT_ID: string;
-    R2_ACCESS_KEY_ID: string;
-    R2_SECRET_ACCESS_KEY: string;
-    R2_BUCKET: string;
+    /** S3-compatible storage (R2, AWS S3, MinIO, Supabase, ...). */
+    S3_ENDPOINT: string;
+    S3_REGION: string;
+    S3_BUCKET: string;
+    S3_ACCESS_KEY_ID: string;
+    S3_SECRET_ACCESS_KEY: string;
+    S3_FORCE_PATH_STYLE: string;
   }
 }
 

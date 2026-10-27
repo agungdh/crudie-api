@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { createR2, R2Error } from "../lib/r2";
+import { createS3, S3Error } from "../lib/s3";
 
 export type FileEnv = {
   Bindings: CloudflareBindings;
@@ -8,20 +8,20 @@ export type FileEnv = {
 export const filesRoute = new Hono<FileEnv>();
 
 filesRoute.onError((err, c) => {
-  if (err instanceof R2Error) {
+  if (err instanceof S3Error) {
     return c.json({ error: "Storage error", operation: err.operation, detail: err.detail }, 502);
   }
   throw err;
 });
 
-/** Upload (or overwrite) an object. Body is streamed straight to R2. */
+/** Upload (or overwrite) an object. Body is streamed straight to S3. */
 filesRoute.put("/:key{.+}", async (c) => {
   const key = c.req.param("key");
   const body = await c.req.arrayBuffer();
   if (body.byteLength === 0) return c.json({ error: "Body is required" }, 400);
 
-  const r2 = createR2(c.env);
-  const result = await r2.put(key, body, {
+  const s3 = createS3(c.env);
+  const result = await s3.put(key, body, {
     contentType: c.req.header("content-type") ?? "application/octet-stream",
     cacheControl: c.req.header("cache-control") ?? undefined,
   });
@@ -32,16 +32,16 @@ filesRoute.put("/:key{.+}", async (c) => {
 /** Download an object, honouring `If-None-Match`. */
 filesRoute.get("/:key{.+}", async (c) => {
   const key = c.req.param("key");
-  const r2 = createR2(c.env);
+  const s3 = createS3(c.env);
 
-  const exists = await r2.head(key);
+  const exists = await s3.head(key);
   if (!exists) return c.json({ error: "Not found" }, 404);
 
   if (exists.etag && c.req.header("if-none-match") === exists.etag) {
     return new Response(null, { status: 304, headers: { etag: exists.etag } });
   }
 
-  const object = await r2.get(key);
+  const object = await s3.get(key);
   if (!object) return c.json({ error: "Not found" }, 404);
 
   const headers = new Headers({ "content-type": object.contentType ?? "application/octet-stream" });
@@ -53,9 +53,9 @@ filesRoute.get("/:key{.+}", async (c) => {
 
 filesRoute.delete("/:key{.+}", async (c) => {
   const key = c.req.param("key");
-  const r2 = createR2(c.env);
+  const s3 = createS3(c.env);
 
-  await r2.delete(key);
+  await s3.delete(key);
   return c.body(null, 204);
 });
 
@@ -68,10 +68,10 @@ filesRoute.post("/:key{.+}/presign", async (c) => {
   }
 
   const expiresIn = Number(c.req.query("expires") ?? 3600);
-  const r2 = createR2(c.env);
+  const s3 = createS3(c.env);
 
   try {
-    const url = await r2.presign(key, { method, expiresIn });
+    const url = await s3.presign(key, { method, expiresIn });
     return c.json({ data: { url, method, expiresIn } });
   } catch (err) {
     if (err instanceof RangeError) return c.json({ error: err.message }, 400);

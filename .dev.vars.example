@@ -9,8 +9,20 @@ DATABASE_URL="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pool
 # migrations. Omit to fall back to DATABASE_URL.
 DATABASE_URL_DIRECT="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require"
 
-# Cloudflare R2 (S3 API)
-R2_ACCOUNT_ID="<account-id>"
-R2_ACCESS_KEY_ID="<access-key-id>"
-R2_SECRET_ACCESS_KEY="<secret-access-key>"
-R2_BUCKET="crudie-api"
+# S3-compatible object storage (Cloudflare R2, AWS S3, MinIO, Supabase
+# Storage, Backblaze B2, Wasabi, ...).
+#
+# S3_ENDPOINT is the base URL WITHOUT the bucket name:
+#   R2:       https://<account-id>.r2.cloudflarestorage.com
+#   AWS:      https://s3.<region>.amazonaws.com
+#   MinIO:    http://localhost:9000
+#   Supabase: https://<project-ref>.storage.supabase.co/storage/v1/s3
+S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com"
+# R2 uses "auto"; AWS/MinIO expect the real region (e.g. "us-east-1").
+S3_REGION="auto"
+S3_BUCKET="crudie-api"
+S3_ACCESS_KEY_ID="<access-key-id>"
+S3_SECRET_ACCESS_KEY="<secret-access-key>"
+# Path style (default) works everywhere including R2/MinIO/Supabase.
+# Set to "false" for virtual-hosted style (default on most AWS regions).
+S3_FORCE_PATH_STYLE="true"

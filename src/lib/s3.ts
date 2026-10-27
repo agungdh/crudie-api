@@ -1,13 +1,26 @@
 import { AwsClient } from "aws4fetch";
 
-export interface R2Binding {
-  R2_ACCOUNT_ID: string;
-  R2_ACCESS_KEY_ID: string;
-  R2_SECRET_ACCESS_KEY: string;
-  R2_BUCKET: string;
+/**
+ * Any S3-compatible object storage: Cloudflare R2, AWS S3, MinIO,
+ * Backblaze B2, Supabase Storage, Wasabi, etc.
+ */
+export interface S3Config {
+  /**
+   * Base endpoint **without** the bucket name. R2 uses
+   * `https://<account>.r2.cloudflarestorage.com`; AWS uses
+   * `https://s3.<region>.amazonaws.com`; MinIO uses `http://localhost:9000`.
+   */
+  S3_ENDPOINT: string;
+  S3_BUCKET: string;
+  S3_ACCESS_KEY_ID: string;
+  S3_SECRET_ACCESS_KEY: string;
+  /** SigV4 region. R2 uses `auto`; AWS/MinIO expect the real region. */
+  S3_REGION?: string;
+  /** `"false"` switches to virtual-hosted style (`<bucket>.<host>`). Defaults to path style. */
+  S3_FORCE_PATH_STYLE?: string;
 }
 
-export interface R2Object {
+export interface S3Object {
   body: ReadableStream;
   contentType: string | null;
   etag: string | null;
@@ -25,38 +38,56 @@ export interface PresignOptions {
   expiresIn?: number;
 }
 
-export class R2Error extends Error {
+export class S3Error extends Error {
   constructor(
     readonly operation: string,
     readonly key: string,
     readonly status: number,
     readonly detail: string,
   ) {
-    super(`R2 ${operation} failed for "${key}" (${status})`);
-    this.name = "R2Error";
+    super(`S3 ${operation} failed for "${key}" (${status})`);
+    this.name = "S3Error";
   }
 }
 
+/** Reads the first `<tag>…</tag>` text node from an S3 XML response. */
+function xmlValue(xml: string, tag: string) {
+  const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+  return match?.[1] ?? null;
+}
+
 /**
- * Minimal S3 client for Cloudflare R2, signed with aws4fetch.
+ * Minimal S3 client signed with aws4fetch.
  * Works in Workers out of the box (no S3 SDK, no node built-ins).
  */
-export function createR2(env: R2Binding) {
+export function createS3(env: S3Config) {
   const client = new AwsClient({
-    accessKeyId: env.R2_ACCESS_KEY_ID,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    accessKeyId: env.S3_ACCESS_KEY_ID,
+    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     service: "s3",
-    region: "auto",
+    region: env.S3_REGION || "auto",
   });
 
-  const endpoint = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET}`;
+  const base = env.S3_ENDPOINT.replace(/\/+$/, "");
+  const bucket = env.S3_BUCKET;
+  const pathStyle = env.S3_FORCE_PATH_STYLE !== "false";
+
+  // Path style: https://host/<bucket>/<key> (R2, MinIO, Supabase, ...).
+  // Virtual-hosted: https://<bucket>.host/<key> (AWS default).
+  const endpoint = pathStyle
+    ? `${base}/${bucket}`
+    : (() => {
+        const url = new URL(base);
+        url.hostname = `${bucket}.${url.hostname}`;
+        return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+      })();
 
   const objectUrl = (key: string) =>
     `${endpoint}/${key.replace(/^\/+/, "")}`;
 
   async function assertOk(operation: string, key: string, res: Response) {
     if (res.ok) return;
-    throw new R2Error(
+    throw new S3Error(
       operation,
       key,
       res.status,
@@ -87,7 +118,7 @@ export function createR2(env: R2Binding) {
       return { key, etag: res.headers.get("etag") };
     },
 
-    async get(key: string, headers?: HeadersInit): Promise<R2Object | null> {
+    async get(key: string, headers?: HeadersInit): Promise<S3Object | null> {
       const res = await client.fetch(objectUrl(key), { headers });
       if (res.status === 404) return null;
       await assertOk("get", key, res);
@@ -130,10 +161,13 @@ export function createR2(env: R2Binding) {
       const res = await client.fetch(`${endpoint}?${params}`);
       await assertOk("list", prefix, res);
 
+      // Pagination lives in the XML body; S3 (and R2) set no x-amz-* headers here.
+      const xml = await res.text();
+
       return {
-        xml: await res.text(),
-        truncated: res.headers.get("x-amz-truncated") === "true",
-        nextCursor: res.headers.get("x-amz-next-continuation-token"),
+        xml,
+        truncated: xmlValue(xml, "IsTruncated") === "true",
+        nextCursor: xmlValue(xml, "NextContinuationToken"),
       };
     },
 
@@ -156,4 +190,4 @@ export function createR2(env: R2Binding) {
   };
 }
 
-export type R2 = ReturnType<typeof createR2>;
+export type S3 = ReturnType<typeof createS3>;

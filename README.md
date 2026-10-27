@@ -1,7 +1,7 @@
 # crudie-api
 
 Hono API on Cloudflare Workers, with Supabase Postgres (Drizzle ORM) and
-Cloudflare R2 storage (aws4fetch).
+S3-compatible object storage (aws4fetch).
 
 ```txt
 npm install
@@ -49,14 +49,32 @@ npm run db:studio     # Drizzle Studio
 `drizzle-kit` membaca `.env` atau `.dev.vars` (lihat `drizzle.config.ts`), jadi
 cukup satu tempat untuk lokal.
 
-## Storage (R2 + aws4fetch)
+## Storage (S3-compatible + aws4fetch)
 
-`src/lib/r2.ts` adalah klien S3 minimal (tanpa AWS SDK), dipakai di
-`src/routes/files.ts`. Buat bucket dulu, lalu buat R2 API token dengan
-permission *Object Read & Write* untuk bucket tersebut.
+`src/lib/s3.ts` adalah klien S3 minimal (tanpa AWS SDK), dipakai di
+`src/routes/files.ts`. Karena cuma butuh endpoint + kredensial S3, vendor bisa
+diganti tanpa ubah kode: Cloudflare R2, AWS S3, MinIO, Supabase Storage,
+Backblaze B2, Wasabi, dan lainnya.
 
-Secrets yang dibutuhkan: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
+Secrets yang dibutuhkan:
+
+| Env | Keterangan |
+| --- | --- |
+| `S3_ENDPOINT` | Base URL **tanpa** nama bucket |
+| `S3_REGION` | `auto` untuk R2, region asli untuk AWS/MinIO |
+| `S3_BUCKET` | Nama bucket |
+| `S3_ACCESS_KEY_ID` | Access key |
+| `S3_SECRET_ACCESS_KEY` | Secret key |
+| `S3_FORCE_PATH_STYLE` | `true` (default) atau `false` untuk virtual-hosted style |
+
+Contoh `S3_ENDPOINT`:
+
+```txt
+R2        https://<account-id>.r2.cloudflarestorage.com
+AWS       https://s3.<region>.amazonaws.com
+MinIO     http://localhost:9000
+Supabase  https://<project-ref>.storage.supabase.co/storage/v1/s3
+```
 
 ## Endpoints
 
@@ -81,10 +99,12 @@ Semua error dikembalikan sebagai JSON `{ "error": "..." }`.
 
 ```txt
 wrangler secret put DATABASE_URL
-wrangler secret put R2_ACCOUNT_ID
-wrangler secret put R2_ACCESS_KEY_ID
-wrangler secret put R2_SECRET_ACCESS_KEY
-wrangler secret put R2_BUCKET
+wrangler secret put S3_ENDPOINT
+wrangler secret put S3_REGION
+wrangler secret put S3_BUCKET
+wrangler secret put S3_ACCESS_KEY_ID
+wrangler secret put S3_SECRET_ACCESS_KEY
+wrangler secret put S3_FORCE_PATH_STYLE
 npm run deploy
 ```
 
