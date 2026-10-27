@@ -7,8 +7,6 @@
 	"name": "crudie-api",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-23",
-	// Required for `postgres` (node:net / node:tls) to reach Supabase.
-	"compatibility_flags": ["nodejs_compat"],
 	"assets": {
 		"binding": "ASSETS",
 		"directory": "./public"
