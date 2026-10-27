@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Single Cloudflare Worker: a [Hono](https://hono.dev) API (`src/index.ts`) plus static assets in `public/`. No framework build step — Wrangler bundles `src/index.ts` directly.
+Single Cloudflare Worker: a [Hono](https://hono.dev) API (`src/index.ts`) with no static assets. No framework build step — Wrangler bundles `src/index.ts` directly.
 
 Postgres only — no D1, no KV. Local dev runs the database in Docker; production is any hosted Postgres reached through a pooler (Supabase / PgBouncer).
 
@@ -45,7 +45,7 @@ Every list endpoint is keyset/cursor paginated. No `offset`, no `total` count qu
 
 - `worker-configuration.d.ts` is generated — never hand-edit. Add bindings/vars/secrets in `wrangler.jsonc` (JSONC, comments allowed), then run `npm run cf-typegen`. `CloudflareBindings` is a global interface used as the Hono generic: `new Hono<{ Bindings: CloudflareBindings }>()`.
 - Entrypoint uses Workers module syntax: `export default app` (no `serve()` call, no Node server).
-- `public/` is served as static assets through the `ASSETS` binding before the Worker runs; only unmatched paths (e.g. `/message`) reach Hono. `public/index.html` is the demo page calling `/message`.
+- There are no static assets: no `assets` block in `wrangler.jsonc` and no `public/` directory, so every request reaches Hono. If assets are ever needed again, add `"assets": { "binding": "ASSETS", "directory": "./public" }` and re-run `npm run cf-typegen`.
 - JSX/TSX is preconfigured (`hono/jsx` via `tsconfig.json`), so `.tsx` route files work without extra setup.
 - Local secrets/vars go in `.dev.vars` (gitignored); production secrets via `wrangler secret put`.
 - `compatibility_date` in `wrangler.jsonc` is pinned to the workerd types used by `worker-configuration.d.ts`; don't bump it casually.
