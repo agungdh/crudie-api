@@ -2,8 +2,11 @@
 
 Single Cloudflare Worker: a [Hono](https://hono.dev) API (`src/index.ts`) plus static assets in `public/`. No framework build step — Wrangler bundles `src/index.ts` directly.
 
+Postgres only — no D1, no KV. Local dev runs the database in Docker; production is any hosted Postgres reached through a pooler (Supabase / PgBouncer).
+
 ## Commands
 
+- `docker compose up -d` — local Postgres 17 (and Adminer at http://localhost:8083) from `compose.yml`. MinIO will be added to the same compose file later; S3 storage is not wired up locally yet.
 - `npm install` — npm is the documented manager; `package-lock.json` is tracked even though `.gitignore` lists it.
 - `npm run dev` — `wrangler dev`, local server at http://localhost:8787 (uses `.wrangler/` state, no Cloudflare login needed).
 - `npm run deploy` — `wrangler deploy --minify`; needs Cloudflare auth (`wrangler login` or `CLOUDFLARE_API_TOKEN`).
@@ -20,8 +23,8 @@ There is no lint, test, or typecheck script. TypeScript is not a dependency, so 
 - JSX/TSX is preconfigured (`hono/jsx` via `tsconfig.json`), so `.tsx` route files work without extra setup.
 - Local secrets/vars go in `.dev.vars` (gitignored); production secrets via `wrangler secret put`.
 - `compatibility_date` in `wrangler.jsonc` is pinned to the workerd types used by `worker-configuration.d.ts`; don't bump it casually.
-- Node.js compat is implicit, not configured: with `compatibility_date` >= `2026-08-04` Workers enables `nodejs_compat`/`nodejs_compat_v2` by default. That is what lets `postgres` import `node:net`/`node:tls` (mapped to `cloudflare:sockets`) to reach Supabase — so no `compatibility_flags` entry is needed. If the compatibility date is ever moved before `2026-08-04`, add `"compatibility_flags": ["nodejs_compat"]` back.
-- DB: `DATABASE_URL` must point at the Supabase **transaction pooler** (port 6543), which is why `postgres()` is created with `prepare: false`. Never hoist the client to module scope — Workers cannot reuse sockets across requests, so `src/db/middleware.ts` creates it per request and closes it with `ctx.waitUntil`. `DATABASE_URL_DIRECT` (port 5432, session mode) is only used by `drizzle.config.ts` for migrations.
+- Node.js compat is implicit, not configured: with `compatibility_date` >= `2026-08-04` Workers enables `nodejs_compat`/`nodejs_compat_v2` by default. That is what lets `postgres` import `node:net`/`node:tls` (mapped to `cloudflare:sockets`) to reach a hosted Postgres — so no `compatibility_flags` entry is needed. If the compatibility date is ever moved before `2026-08-04`, add `"compatibility_flags": ["nodejs_compat"]` back.
+- DB: `postgres-js` + Drizzle, plain Postgres connection string — no D1/`@cloudflare/d1`. `DATABASE_URL` points at the **pooled** endpoint: local Docker Postgres in dev (`postgresql://admin:admin@localhost:5432/crudie`), and on deploy a PgBouncer-family pooler (Supabase transaction pooler on port 6543, or whatever the host offers). Transaction pooling does not support prepared statements, so `prepare: false` in `src/db/index.ts` is mandatory and must not be "optimized" away — it is also harmless on the direct local connection. Never hoist the client to module scope: Workers cannot reuse sockets across requests, so `src/db/middleware.ts` creates it per request and closes it with `ctx.waitUntil`. `DATABASE_URL_DIRECT` (session/direct connection, port 5432) is only used by `drizzle.config.ts` for migrations — PgBouncer transaction mode cannot hold the session state/locks they need. Locally both can be the same URL.
 - Secrets are not visible to `npm run cf-typegen`; declare them by augmenting `CloudflareBindings` in `src/env.d.ts`.
-- Storage uses `aws4fetch` (S3 SigV4) in `src/lib/s3.ts` — no AWS SDK, no R2 binding, and no R2-specific code. It talks to any S3-compatible vendor (R2, AWS S3, MinIO, Supabase, B2, Wasabi) via `S3_ENDPOINT` + `S3_REGION` + `S3_BUCKET` + credentials, with path style by default (`S3_FORCE_PATH_STYLE=false` for virtual-hosted style).
+- Storage uses `aws4fetch` (S3 SigV4) in `src/lib/s3.ts` — no AWS SDK, no R2 binding, and no R2-specific code. It talks to any S3-compatible vendor (R2, AWS S3, MinIO, Supabase, B2, Wasabi) via `S3_ENDPOINT` + `S3_REGION` + `S3_BUCKET` + credentials, with path style by default (`S3_FORCE_PATH_STYLE=false` for virtual-hosted style). MinIO is planned as a compose service for local storage, but is not in `compose.yml` yet — don't add MinIO-specific code paths, the generic S3 client must stay vendor-neutral.
 - `pnpm-workspace.yaml` only whitelists `esbuild`/`workerd` install scripts — there is no pnpm lockfile, and the repo is not a workspace.
