@@ -13,19 +13,31 @@ Postgres only — no D1, no KV. Local dev runs the database in Docker; productio
 - `npm run cf-typegen` — regenerate `worker-configuration.d.ts` after changing bindings/vars in `wrangler.jsonc`.
 - `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` — Drizzle Kit against `src/db/schema.ts`; SQL migrations live in `drizzle/` and are committed.
 
-There is no lint, test, or typecheck script. TypeScript is not a dependency, so `npx tsc --noEmit` fails with "this is not the tsc command"; use `npx wrangler deploy --dry-run` as the fastest build/verification check. There is no CI.
+There is no lint, test, or typecheck script. TypeScript is not a dependency, so `npx tsc --noEmit` fails with "this is not the tsc command"; use `npx wrangler deploy --dry-run` as the fastest build/verification check, and `npx -y -p typescript@5 tsc --noEmit` when you need real type checking without adding a dependency. There is no CI.
+
+## Validation (zod)
+
+Requests are validated with [zod](https://zod.dev) v4 through `@hono/zod-validator`. Schemas live next to the route (`src/routes/<resource>.schema.ts`); the shared middleware wrappers live in `src/lib/validation.ts`.
+
+- Use `validateJson`, `validateQuery`, and `validateParam` from `src/lib/validation.ts` — never call `schema.parse` in a handler and never hand-roll `UUID_RE` / `EMAIL_RE` / `DATE_RE` again. Read the parsed value with `c.req.valid("json" | "query" | "param")`; it is fully typed, so no `typeof` narrowing is needed.
+- Failures are a 400 with `{ error, issues: [{ path, message }] }`. `error` is the first issue's message (a client that only reads `error` behaves as before); `issues` lists every problem and `path` is a dotted field path, empty for object-level errors such as `Nothing to update`.
+- Query params arrive as strings: coerce and default inside the schema (`z.coerce.number().int().min(1).max(100).default(20)`). `listPegawaiQuerySchema` strips empty values first, so `?sort=&after=` means the same as omitting them. Invalid values (`?limit=abc`, `?limit=1000`, `?sort=bogus`) are a **400** — not silently ignored or clamped. Duplicate params arrive as arrays and fail the string schema.
+- PATCH payloads are `createXSchema.partial()` plus a refine for "Nothing to update". Keep the three-state convention in the schema: key absent (`undefined`) = leave the column alone, `null` = clear it, blank/whitespace-only string = `null` (drizzle skips `undefined` in `.set()`).
+- The `json` validator only parses requests with a JSON `Content-Type`; a bodiless request is validated as `{}`, so required fields still fail. Malformed JSON throws `HTTPException`, and `app.onError` in `src/index.ts` turns `HTTPException` into a JSON 400 — keep that branch, otherwise malformed bodies become 500s.
+- Sort whitelists are intentionally duplicated: `SORT_KEYS` (zod enum, schema file) and `SORT_COLUMNS` (Drizzle columns, route). `SORT_COLUMNS` uses `satisfies Record<SortKey, AnyPgColumn>`, so adding a column to only one of them is a type error.
+- Unknown body keys are stripped, not rejected (zod's default), so sending extra fields keeps working.
 
 ## List endpoints: cursor pagination
 
 Every list endpoint is keyset/cursor paginated. No `offset`, no `total` count query.
 
 - Cursor is `?after=<uuid>` — the `uuid` (never the internal integer `id`) of the **last row of the previous page**. Omit it for the first page.
-- Response shape is `{ data: [...], meta: { nextCursor } }`, where `nextCursor` is the uuid of the last row on the page, or `null` once there are no more rows. To decide, fetch `limit + 1` rows and drop the extra one. `limit` stays a capped query param (default 20, max 100).
+- Response shape is `{ data: [...], meta: { nextCursor } }`, where `nextCursor` is the uuid of the last row on the page, or `null` once there are no more rows. To decide, fetch `limit + 1` rows and drop the extra one. `limit` stays a capped query param (default 20, max 100); an out-of-range or non-integer `limit` is a 400 (see Validation).
 - Filters and sort are **their own plain query params**, never packed/encoded/signed into the cursor. The cursor is a bare uuid so it stays readable and debuggable: `?status=aktif&q=budi&sort=nama&order=asc&after=<uuid>`.
 - Because the cursor carries no state, the client must resend the same filters/sort on every page. Changing a filter or the sort restarts pagination (drop `after`); the server cannot know the cursor was produced under different criteria, so the client owns keeping them stable.
 - Sort is `?sort=<field>&order=asc|desc`, whitelisted per endpoint (unknown field/order → 400). **Default when `sort` is absent: `id desc`** (newest first). Always append `id` as the final, same-direction tiebreaker so the ordering is total and the cursor cannot skip or repeat rows.
 - Query pattern: resolve the cursor row to its sort value + `id`, then `WHERE (sortValue, id) < (cursorValue, cursorId)` (`>` for `asc`), combined with the filter conditions and `deleted_at is null`, ordered by `sort, id` in the requested direction.
-- `src/routes/pegawai.ts` is the reference implementation: it resolves `after` to `(sortValue, id)`, compares the row tuple against it, and returns `nextCursor` from a `limit + 1` fetch.
+- `src/routes/pegawai.ts` is the reference implementation: `src/routes/pegawai.schema.ts` validates the query (`sort`/`order`/`limit`/`after`), and the route resolves `after` to `(sortValue, id)`, compares the row tuple against it, and returns `nextCursor` from a `limit + 1` fetch.
 
 ## Conventions & gotchas
 
